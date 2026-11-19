@@ -38,7 +38,7 @@ def status_text(pair) -> str:
 
 
 def dispatcher(db: Database, username: str, token: str, app_url: str) -> Dispatcher:
-    dp = Dispatcher()
+    dp = Dispatcher(disable_fsm=True)
 
     @dp.message(CommandStart(), F.chat.type == ChatType.PRIVATE)
     async def start(message: Message, command: CommandObject):

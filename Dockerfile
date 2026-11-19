@@ -28,6 +28,7 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 WEB_DIST=/app/web/dist
 COPY --from=dependencies /app/.venv /app/.venv
 COPY streakme/ ./streakme/
 COPY --from=frontend /web/dist ./web/dist/
+RUN /app/.venv/bin/python -m compileall -q /usr/local/lib/python3.15 /app/.venv/lib /app/streakme
 USER 65534:65534
 EXPOSE 8080
 CMD ["/app/.venv/bin/python", "-m", "streakme"]

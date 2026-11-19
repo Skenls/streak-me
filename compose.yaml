@@ -23,17 +23,14 @@ services:
       db-role:
         condition: service_completed_successfully
     healthcheck:
-      test:
-        - CMD
-        - /app/.venv/bin/python
-        - -c
-        - "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/healthz', timeout=3).close()"
-      interval: 15s
+      test: ["CMD", "/bin/busybox", "wget", "-q", "-Y", "off", "-T", "3", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
       timeout: 5s
       retries: 4
       start_period: 20s
   db:
     <<: *postgres
+    command: ["postgres", "-c", "shared_buffers=32MB"]
     restart: unless-stopped
     environment:
       POSTGRES_USER: streakme
@@ -46,9 +43,10 @@ services:
       - streakme-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "streakme", "-d", "streakme"]
-      interval: 5s
+      interval: 30s
       timeout: 3s
       retries: 10
+      start_period: 20s
   db-role:
     <<: *postgres
     command: ["psql", "-X", "-w", "-v", "ON_ERROR_STOP=1", "-f", "/db-role.sql"]

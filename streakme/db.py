@@ -44,7 +44,7 @@ def telegram_photo(value: str | None) -> str | None:
 class Database:
     def __init__(self, dsn: str):
         self.pool = AsyncConnectionPool(
-            dsn, open=False, min_size=1, max_size=8, max_waiting=24, timeout=2,
+            dsn, open=False, min_size=1, max_size=4, max_idle=30, max_waiting=24, timeout=2,
             kwargs={
                 "row_factory": dict_row,
                 "connect_timeout": 5,

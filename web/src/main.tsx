@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Carousel } from './carousel'
+import { startLiveUpdates } from './live'
 import { daysLabel, pairState, rank, type Dashboard, type Person, type Streak } from './model'
 import { api, haptic, initTelegram, inTelegram, tg } from './telegram'
 import { Avatar, Flame } from './visuals'
@@ -163,16 +164,24 @@ function App() {
   const [inviting, setInviting] = useState(false)
   const revision = useRef(0)
   const refreshing = useRef(false)
+  const refreshQueued = useRef(false)
+  const snapshot = useRef<string | null>(null)
+  const loaded = data !== null
   const streaks = data?.streaks ?? []
   const detail = streaks.find(pair => pair.id === selected)
 
   const refresh = useCallback(async () => {
-    if (refreshing.current) return
+    if (document.visibilityState !== 'visible' || tg?.isActive === false) return
+    if (refreshing.current) {
+      refreshQueued.current = true
+      return
+    }
     refreshing.current = true
     const request = ++revision.current
     try {
-      const dashboard = await api<Dashboard>('streaks')
+      const dashboard = await api<Dashboard>(snapshot.current === null ? 'streaks' : 'streaks?refresh=1')
       if (request === revision.current) {
+        snapshot.current = dashboard.snapshot ?? null
         setData(dashboard)
         setError('')
       }
@@ -182,25 +191,31 @@ function App() {
       }
     } finally {
       refreshing.current = false
+      if (refreshQueued.current) {
+        refreshQueued.current = false
+        void refresh()
+      }
     }
   }, [])
 
+  useEffect(initTelegram, [])
   useEffect(() => {
-    const cleanup = initTelegram()
-    function refreshVisible() {
-      if (document.visibilityState === 'visible') void refresh()
-    }
-    void refresh()
-    const timer = window.setInterval(refreshVisible, 30_000)
-    document.addEventListener('visibilitychange', refreshVisible)
-    tg?.onEvent('activated', refreshVisible)
+    if (loaded) return
+    function load() { void refresh() }
+    load()
+    document.addEventListener('visibilitychange', load)
+    window.addEventListener('online', load)
+    tg?.onEvent('activated', load)
     return () => {
-      clearInterval(timer)
-      document.removeEventListener('visibilitychange', refreshVisible)
-      tg?.offEvent('activated', refreshVisible)
-      cleanup()
+      document.removeEventListener('visibilitychange', load)
+      window.removeEventListener('online', load)
+      tg?.offEvent('activated', load)
     }
-  }, [refresh])
+  }, [loaded, refresh])
+
+  useEffect(() => {
+    if (loaded) return startLiveUpdates(() => snapshot.current, refresh)
+  }, [loaded, refresh])
 
   async function updatePair(pair: Streak, action: DetailAction) {
     const path = `streaks/${pair.id}`

@@ -14,6 +14,7 @@ export interface Streak {
 }
 
 export interface Dashboard {
+  snapshot: string
   me: Person
   streaks: Streak[]
 }

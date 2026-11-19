@@ -1,8 +1,9 @@
 type Insets = { top: number; right: number; bottom: number; left: number }
-type TelegramEvent = 'safeAreaChanged' | 'contentSafeAreaChanged' | 'fullscreenChanged' | 'activated'
+type TelegramEvent = 'safeAreaChanged' | 'contentSafeAreaChanged' | 'fullscreenChanged' | 'activated' | 'deactivated'
 
 interface TelegramApp {
   initData: string
+  isActive?: boolean
   safeAreaInset?: Insets
   contentSafeAreaInset?: Insets
   ready(): void

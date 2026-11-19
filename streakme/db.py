@@ -7,6 +7,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from .rules import RESTORE_LIMIT, Confirmations, restores_left, streak_status
+from .updates import DashboardUpdates
 
 PAIR_VIEW = """
     SELECT s.*, p.id AS friend_id, p.name, p.username, p.photo_url
@@ -43,6 +44,7 @@ def telegram_photo(value: str | None) -> str | None:
 
 class Database:
     def __init__(self, dsn: str):
+        self.updates = DashboardUpdates()
         self.pool = AsyncConnectionPool(
             dsn, open=False, min_size=1, max_size=4, max_idle=30, max_waiting=24, timeout=2,
             kwargs={
@@ -66,8 +68,9 @@ class Database:
         name = " ".join(part for part in (user.first_name, user.last_name) if part)
         has_photo = hasattr(user, "photo_url")
         photo = telegram_photo(getattr(user, "photo_url", None))
+        peers = []
         async with self.pool.connection() as conn:
-            await conn.execute(
+            changed = await conn.execute(
                 """
                 INSERT INTO profiles (id, name, username, photo_url) VALUES (%s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, username = EXCLUDED.username,
@@ -77,6 +80,17 @@ class Database:
                 """,
                 (user.id, name, user.username, photo, has_photo, has_photo),
             )
+            if changed.rowcount and self.updates.listeners:
+                result = await conn.execute(
+                    """
+                    SELECT CASE WHEN low_id = %(user)s THEN high_id ELSE low_id END AS peer
+                    FROM streaks WHERE %(user)s IN (low_id, high_id)
+                    """,
+                    {"user": user.id},
+                )
+                peers = [row["peer"] for row in await result.fetchall()]
+        if changed.rowcount:
+            self.updates.changed(*peers)
 
     async def invite_code(self, user: int, *, reset: bool = False) -> str:
         generated = secrets.token_urlsafe(18)
@@ -137,14 +151,16 @@ class Database:
                 "DELETE FROM streaks s WHERE low_id = %(low)s AND high_id = %(high)s AND " + EXHAUSTED,
                 {"low": low, "high": high, "today": datetime.now(UTC).date(), "limit": RESTORE_LIMIT},
             )
-            await conn.execute(
+            created = await conn.execute(
                 """
                 INSERT INTO streaks (low_id, high_id) VALUES (%s, %s)
                 ON CONFLICT (low_id, high_id) DO NOTHING
                 """,
                 (low, high),
             )
-            return "ok"
+        if created.rowcount:
+            self.updates.changed(low, high)
+        return "ok"
 
     async def list(self, user: int):
         today = datetime.now(UTC).date()
@@ -168,6 +184,7 @@ class Database:
             if row is None:
                 return None
             previous = self.confirmations(row)
+            changed = False
             if action == "confirm":
                 state = previous.confirm(user == row["low_id"], today)
                 if previous != state:
@@ -179,6 +196,7 @@ class Database:
                         (state.low_day, state.high_day, state.completed_day, state.days, pair_id),
                     )
                     row.update(vars(state))
+                    changed = True
             elif action == "restore":
                 updated = previous.restore(today)
                 remaining = restores_left(row["restore_month"], row["restore_count"], today)
@@ -192,14 +210,21 @@ class Database:
                         (updated.completed_day, month, count, pair_id),
                     )
                     row.update(completed_day=updated.completed_day, restore_month=month, restore_count=count)
-            return self.present(row, user, today)
+                    changed = True
+        if changed:
+            self.updates.changed(row["low_id"], row["high_id"])
+        return self.present(row, user, today)
 
     async def delete(self, pair_id: int, user: int) -> bool:
         async with self.pool.connection() as conn:
             result = await conn.execute(
-                "DELETE FROM streaks WHERE id = %s AND %s IN (low_id, high_id)", (pair_id, user)
+                "DELETE FROM streaks WHERE id = %s AND %s IN (low_id, high_id) RETURNING low_id, high_id",
+                (pair_id, user),
             )
-            return bool(result.rowcount)
+            row = await result.fetchone()
+        if row:
+            self.updates.changed(row["low_id"], row["high_id"])
+        return row is not None
 
     async def inline_pair(self, chat: str, owner: int, user: int) -> int | None:
         async with self.pool.connection() as conn:
@@ -229,6 +254,7 @@ class Database:
             await conn.execute("DELETE FROM streaks s WHERE " + EXHAUSTED, {"today": today, "limit": RESTORE_LIMIT})
             await conn.execute("DELETE FROM streak_reminders WHERE day < %s::date - 2", (today,))
             await conn.execute("DELETE FROM claimed_invites WHERE claimed_at < now() - interval '7 days'")
+        self.updates.day_changed()
 
     async def claim_reminders(self, today):
         async with self.pool.connection() as conn:

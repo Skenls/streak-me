@@ -13,6 +13,7 @@ from aiogram import Bot
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.methods import AnswerCallbackQuery, AnswerInlineQuery, SendMessage
 from aiogram.types import Update
+from aiohttp import WSMsgType, WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
 
 from streakme.bot import dispatcher
@@ -22,6 +23,7 @@ from streakme.server import create_app
 
 TOKEN = "1234:integration-test"
 USERNAME = "streakme_test_bot"
+ORIGIN = "https://streak.example.com"
 DSN = os.getenv("TEST_DATABASE_URL")
 
 
@@ -52,7 +54,7 @@ class IntegrationTest(unittest.IsolatedAsyncioTestCase):
         self.db = Database(DSN)
         await self.db.open()
         self.addAsyncCleanup(self.db.close)
-        app = create_app(self.db, Path("web/dist"), TOKEN, USERNAME)
+        app = create_app(self.db, Path("web/dist"), TOKEN, USERNAME, ORIGIN)
         self.client = TestClient(TestServer(app))
         await self.client.start_server()
         self.addAsyncCleanup(self.client.close)
@@ -234,3 +236,52 @@ class IntegrationTest(unittest.IsolatedAsyncioTestCase):
         await self.db.expire(first)
         carried = await self.db.get(new["id"], self.a["id"])
         self.assertEqual((carried["status"], carried["restoresLeft"]), ("lost", 5))
+
+
+    async def test_live_updates_are_scoped_and_catch_up_after_reconnect(self):
+        await self.accept(self.b, self.start_value(await self.invite(self.a)))
+        pair, = await self.db.list(self.a["id"])
+
+        async def revision(user):
+            response = await self.client.get("/api/streaks?refresh=1", headers=auth(user))
+            return (await response.json())["snapshot"]
+
+        async def watch(user, snapshot):
+            ws = await self.client.ws_connect("/api/live", headers={"Origin": ORIGIN})
+            self.addAsyncCleanup(ws.close)
+            await ws.send_json({"proof": auth(user)["Authorization"][4:], "snapshot": snapshot})
+            self.assertEqual(await ws.receive_str(timeout=2), "ready")
+            return ws
+
+        with self.assertRaises(WSServerHandshakeError) as rejected:
+            await self.client.ws_connect("/api/live", headers={"Origin": "https://unknown.example"})
+        self.assertEqual(rejected.exception.status, 403)
+        async with self.client.ws_connect("/api/live", headers={"Origin": ORIGIN}) as denied:
+            await denied.send_json({"proof": "invalid"})
+            message = await denied.receive(timeout=2)
+            self.assertEqual((message.type, message.data), (WSMsgType.CLOSE, 4401))
+
+        initial = await revision(self.b)
+        friend = await watch(self.b, initial)
+        unrelated = await watch(self.c, initial)
+        response = await self.client.post(f"/api/streaks/{pair['id']}/confirm", headers=auth(self.a))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await friend.receive_str(timeout=2), "refresh")
+        with self.assertRaises(TimeoutError):
+            await unrelated.receive(timeout=0.05)
+
+        await self.command({**self.a, "first_name": "Луна"}, "/start")
+        self.assertEqual(await friend.receive_str(timeout=2), "refresh")
+        response = await self.client.get("/api/streaks?refresh=1", headers=auth(self.b))
+        self.assertEqual((await response.json())["streaks"][0]["friend"]["name"], "Луна")
+
+        await friend.close()
+        self.assertNotEqual(await revision(self.b), initial)
+        reconnected = await watch(self.b, initial)
+        self.assertEqual(await reconnected.receive_str(timeout=2), "refresh")
+        response = await self.client.delete(f"/api/streaks/{pair['id']}", headers=auth(self.a))
+        self.assertEqual(response.status, 204)
+        self.assertEqual(await reconnected.receive_str(timeout=2), "refresh")
+        await unrelated.close()
+        await self.db.expire(datetime.now(UTC).date())
+        self.assertEqual(await reconnected.receive_str(timeout=2), "refresh")

@@ -8,6 +8,7 @@ from aiogram import Bot
 from aiogram.types import MenuButtonWebApp, WebAppInfo
 from aiohttp import web
 from psycopg.conninfo import make_conninfo
+from yarl import URL
 
 from .bot import dispatcher
 from .db import Database
@@ -41,7 +42,7 @@ async def application():
         me = await bot.get_me()
         if not me.supports_inline_queries:
             logging.warning("Enable inline mode using /setinline in BotFather.")
-        app = create_app(db, static, token, me.username)
+        app = create_app(db, static, token, me.username, str(URL(app_url).origin()))
         await bot.set_chat_menu_button(
             menu_button=MenuButtonWebApp(text="StreakMe", web_app=WebAppInfo(url=app_url))
         )

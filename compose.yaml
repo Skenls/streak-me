@@ -1,0 +1,40 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      APP_URL: ${APP_URL:-}
+      BOT_TOKEN: ${BOT_TOKEN:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:${APP_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - /app/.venv/bin/python
+        - -c
+        - "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/healthz', timeout=3).close()"
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+  db:
+    image: postgres:18.7-alpine3.24
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: streakme
+      POSTGRES_DB: streakme
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - streakme-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "streakme", "-d", "streakme"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  streakme-data:

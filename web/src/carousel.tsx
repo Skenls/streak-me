@@ -21,7 +21,7 @@ export function Carousel({ streaks, motion, onSelect }: {
     const progress = Math.max(0, Math.min(list.scrollLeft / step, streaks.length - 1))
     const index = Math.round(progress)
     if (!nativeTimeline) {
-      for (let n = 0; n < streaks.length; n++) {
+      for (let n = Math.max(0, index - 2); n <= Math.min(index + 2, streaks.length - 1); n++) {
         const distance = Math.max(-1, Math.min(1, n - progress))
         const slide = list.children[n] as HTMLElement
         slide.style.setProperty('--offset', String(distance))

@@ -9,7 +9,7 @@ export function Avatar({ person, hue }: { person: Person; hue: number }) {
   return <span className="avatar" style={{ '--avatar-hue': hue } as CSSProperties} aria-hidden="true">
     {initials}
     {person.photoUrl && failedUrl !== person.photoUrl && (
-      <img src={person.photoUrl} alt="" draggable="false" referrerPolicy="no-referrer"
+      <img src={person.photoUrl} alt="" draggable="false" loading="lazy" decoding="async" referrerPolicy="no-referrer"
         onError={() => setFailedUrl(person.photoUrl ?? '')} />
     )}
   </span>

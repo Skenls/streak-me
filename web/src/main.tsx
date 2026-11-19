@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Carousel } from './carousel'
-import { daysLabel, pairState, preview, rank, type Dashboard, type Person, type Streak } from './model'
+import { daysLabel, pairState, rank, type Dashboard, type Person, type Streak } from './model'
 import { api, haptic, initTelegram, inTelegram, tg } from './telegram'
 import { Avatar, Flame } from './visuals'
 import './fonts.css'
@@ -118,31 +118,33 @@ function Invite({ onClose }: { onClose(): void }) {
   return <Modal className="invite-modal" onClose={onClose}>
     <div className="invite-art"><Flame /></div>
     <h2 id="dialog-title">Пригласить друга</h2>
-    <p>{inTelegram ? 'Друг примет приглашение в боте. Ссылка действует 7 дней и рассчитана на одного человека.'
-      : 'Приглашения доступны в Mini App внутри Telegram.'}</p>
-    {inTelegram && (url
+    <p>Друг примет приглашение в боте. Ссылка действует 7 дней и рассчитана на одного человека.</p>
+    {url
       ? <><button type="button" className="primary" onClick={share}>Поделиться в Telegram</button>
         <input className="invite-link" readOnly aria-label="Ссылка-приглашение" value={url}
           onFocus={event => event.currentTarget.select()} /></>
       : <button type="button" className="primary" disabled={busy} onClick={prepare}>
         {busy ? 'Создаём…' : 'Создать ссылку'}
-      </button>)}
+      </button>}
     {notice && <p className="error" role="alert">{notice}</p>}
   </Modal>
 }
 
 function App() {
-  const [data, setData] = useState<Dashboard | null>(inTelegram ? null : preview)
+  const [data, setData] = useState<Dashboard | null>(null)
   const [error, setError] = useState('')
   const [selected, setSelected] = useState<number>()
   const [inviting, setInviting] = useState(false)
   const [motion, setMotion] = useState(true)
   const fullscreen = useRef(false)
   const revision = useRef(0)
+  const refreshing = useRef(false)
   const streaks = data?.streaks ?? []
   const detail = streaks.find(pair => pair.id === selected)
 
   const refresh = useCallback(async () => {
+    if (refreshing.current) return
+    refreshing.current = true
     const request = ++revision.current
     try {
       const dashboard = await api<Dashboard>('streaks')
@@ -154,12 +156,13 @@ function App() {
       if (request === revision.current) {
         setError(error instanceof Error ? error.message : 'Не удалось загрузить огоньки.')
       }
+    } finally {
+      refreshing.current = false
     }
   }, [])
 
   useEffect(() => {
     const cleanup = initTelegram()
-    if (!inTelegram) return cleanup
     function refreshVisible() {
       if (document.visibilityState === 'visible') void refresh()
     }
@@ -190,9 +193,7 @@ function App() {
   }
 
   async function confirm(pair: Streak) {
-    const updated = inTelegram
-      ? await api<Streak>(`streaks/${pair.id}/confirm`, 'POST')
-      : { ...pair, confirmed: true, days: pair.days + Number(pair.friendConfirmed && !pair.confirmed) }
+    const updated = await api<Streak>(`streaks/${pair.id}/confirm`, 'POST')
     revision.current++
     setError('')
     setData(previous => previous && {
@@ -204,7 +205,6 @@ function App() {
     <header className="topbar">
       <div className="brand"><span className="brand-mark"><Flame /></span>streak<span>me</span></div>
       <div className="topbar-right">
-        {!inTelegram && <span className="preview-label">Демо</span>}
         <button type="button" className="icon-button motion-toggle"
           aria-label={motion ? 'Приостановить анимации' : 'Включить анимации'}
           onClick={() => setMotion(!motion)}><span className={motion ? 'pause' : 'play'} /></button>
@@ -221,13 +221,21 @@ function App() {
       : <section className="empty"><Flame mascot /><h2>Зажги первый огонёк</h2>
         <p>Пригласи друга, чтобы начать общую серию.</p></section>
     ) : !error && <p className="loading" role="status">Загружаем огоньки…</p>}
-    <footer className="footer">
+    {data && <footer className="footer">
       <button className="primary" type="button" onClick={() => setInviting(true)}><span aria-hidden="true">+</span> Пригласить друга</button>
-    </footer>
+    </footer>}
     {detail && data && <Detail key={detail.id} pair={detail} me={data.me}
       onClose={closePair} onConfirm={() => confirm(detail)} />}
     {inviting && <Invite onClose={() => setInviting(false)} />}
   </main>
 }
 
-createRoot(document.getElementById('root')!).render(<App />)
+createRoot(document.getElementById('root')!).render(inTelegram ? <App /> :
+  <main className="app launch">
+    <section className="empty">
+      <Flame mascot />
+      <h1>StreakMe</h1>
+      <p>Открой приложение из чата с ботом в Telegram.</p>
+    </section>
+  </main>,
+)

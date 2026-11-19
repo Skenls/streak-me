@@ -14,27 +14,29 @@ from .db import Database
 from .server import create_app
 
 
+class RedactingFormatter(logging.Formatter):
+    def format(self, record):
+        message = super().format(record)
+        token = os.environ.get("BOT_TOKEN")
+        return message.replace(token, "[bot token]") if token else message
+
+
 async def application():
-    dsn = make_conninfo(
-        os.getenv("DATABASE_URL", ""),
-        **({"host": "db", "dbname": "streakme", "user": "streakme",
-            "password": os.environ["POSTGRES_PASSWORD"]} if not os.getenv("DATABASE_URL") else {}),
+    token = os.environ["BOT_TOKEN"]
+    app_url = os.environ["APP_URL"]
+    parsed = urlparse(app_url)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+            or parsed.path not in ("", "/") or parsed.query or parsed.fragment):
+        raise ValueError("APP_URL must be the HTTPS address of the Mini App root")
+
+    dsn = os.getenv("DATABASE_URL") or make_conninfo(
+        host="db", dbname="streakme", user="streakme_app", password=os.environ["APP_DB_PASSWORD"]
     )
     db = Database(dsn)
-    await db.initialize()
     static = Path(os.getenv("WEB_DIST", "web/dist"))
-    token = os.getenv("BOT_TOKEN", "")
-    if not token:
-        logging.info("Preview mode. Set BOT_TOKEN and APP_URL to enable Telegram.")
-        return create_app(db, static)
-
-    app_url = os.getenv("APP_URL", "")
-    parsed = urlparse(app_url)
-    if parsed.scheme != "https" or not parsed.hostname:
-        raise ValueError("APP_URL must be a public HTTPS URL")
-
     bot = Bot(token)
     try:
+        await db.open()
         me = await bot.get_me()
         if not me.supports_inline_queries:
             logging.warning("Enable inline mode using /setinline in BotFather.")
@@ -45,11 +47,14 @@ async def application():
         dp = dispatcher(db, me.username, token, app_url)
     except BaseException:
         await bot.session.close()
+        await db.close()
         raise
 
     async def polling_context(app):
         task = asyncio.create_task(
-            dp.start_polling(bot, handle_signals=False, close_bot_session=False)
+            dp.start_polling(
+                bot, handle_signals=False, close_bot_session=False, tasks_concurrency_limit=16
+            )
         )
         try:
             yield
@@ -63,5 +68,7 @@ async def application():
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    handler = logging.StreamHandler()
+    handler.setFormatter(RedactingFormatter("%(levelname)s:%(name)s:%(message)s"))
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
     web.run_app(application(), host="0.0.0.0", port=8080, access_log=None)

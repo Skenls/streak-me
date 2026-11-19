@@ -1,16 +1,27 @@
+x-postgres: &postgres
+  image: streakme-postgres:18.7
+  build:
+    context: .
+    dockerfile: deploy/postgres.Dockerfile
+
 services:
   app:
     build: .
     restart: unless-stopped
     environment:
-      APP_URL: ${APP_URL:-}
-      BOT_TOKEN: ${BOT_TOKEN:-}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
-    ports:
-      - "127.0.0.1:${APP_PORT:-8080}:8080"
+      APP_URL: ${APP_URL:?Set APP_URL}
+      BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN using BotFather}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}
+    networks:
+      backend:
+      proxy:
+        aliases: [streakme-app]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     depends_on:
-      db:
-        condition: service_healthy
+      db-role:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -22,19 +33,47 @@ services:
       retries: 4
       start_period: 20s
   db:
-    image: postgres:18.7-alpine3.24
+    <<: *postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: streakme
       POSTGRES_DB: streakme
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    networks: [backend]
     volumes:
       - streakme-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "streakme", "-d", "streakme"]
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "streakme", "-d", "streakme"]
       interval: 5s
       timeout: 3s
       retries: 10
+  db-role:
+    <<: *postgres
+    command: ["psql", "-X", "-w", "-v", "ON_ERROR_STOP=1", "-f", "/db-role.sql"]
+    environment:
+      PGHOST: db
+      PGUSER: streakme
+      PGDATABASE: streakme
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}
+    networks: [backend]
+    read_only: true
+    user: "70:70"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ./deploy/db-role.sql:/db-role.sql:ro
+      - ./streakme/schema.sql:/database-schema.sql:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+networks:
+  backend:
+    internal: true
+  proxy:
+    external: true
+    name: ${CADDY_NETWORK:-streakme_proxy}
 
 volumes:
   streakme-data:

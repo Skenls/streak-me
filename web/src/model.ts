@@ -45,21 +45,3 @@ export function pairState(pair: Streak) {
   if (pair.friendConfirmed) return 'Друг уже отметился'
   return 'Пора отметиться'
 }
-
-export const preview: Dashboard = {
-  me: { name: 'Ты' },
-  streaks: [
-    {
-      id: 1, days: 24, confirmed: false, friendConfirmed: true,
-      friend: { id: 1, name: 'Луна', username: 'luna' },
-    },
-    {
-      id: 2, days: 134, confirmed: true, friendConfirmed: true,
-      friend: { id: 2, name: 'Мира', username: 'miralight' },
-    },
-    {
-      id: 3, days: 208, confirmed: true, friendConfirmed: false,
-      friend: { id: 3, name: 'Никита', username: 'nik' },
-    },
-  ],
-}

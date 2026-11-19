@@ -48,7 +48,8 @@ def auth(user, *, seconds_ago=0):
 class IntegrationTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.db = Database(DSN)
-        await self.db.initialize()
+        await self.db.open()
+        self.addAsyncCleanup(self.db.close)
         app = create_app(self.db, Path("web/dist"), TOKEN, USERNAME)
         self.client = TestClient(TestServer(app))
         await self.client.start_server()
@@ -76,8 +77,14 @@ class IntegrationTest(unittest.IsolatedAsyncioTestCase):
     async def test_invite_access_and_concurrent_confirmation(self):
         response = await self.client.get("/api/streaks")
         self.assertEqual(response.status, 401)
-        response = await self.client.get("/api/streaks", headers=auth(self.a, seconds_ago=90_000))
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertIn("frame-ancestors https://web.telegram.org", response.headers["Content-Security-Policy"])
+        response = await self.client.get("/api/streaks", headers=auth(self.a, seconds_ago=3_601))
         self.assertEqual(response.status, 401)
+        response = await self.client.get("/api/streaks", headers=auth(self.a, seconds_ago=-61))
+        self.assertEqual(response.status, 401)
+        response = await self.client.get("/api/streaks", headers=auth({**self.a, "photo_url": "https://example.org/photo"}))
+        self.assertIsNone((await response.json())["me"]["photoUrl"])
 
         inline = await self.update(inline_query={"id": "1", "from": self.a, "query": "", "offset": ""})
         self.assertIsInstance(inline, AnswerInlineQuery)

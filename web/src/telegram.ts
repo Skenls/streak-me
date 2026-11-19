@@ -67,11 +67,23 @@ export function haptic() {
 }
 
 export async function api<T>(path: string, method = 'GET'): Promise<T> {
-  const response = await fetch(`/api/${path}`, {
-    method,
-    headers: { Authorization: `tma ${tg?.initData ?? ''}` },
-  })
-  if (response.status === 401) throw new Error('Открой StreakMe заново из Telegram.')
-  if (!response.ok) throw new Error('Связь с сервером прервалась. Попробуй ещё раз.')
-  return response.json()
+  const deadline = new AbortController()
+  const timer = window.setTimeout(() => deadline.abort(), 10_000)
+  try {
+    const response = await fetch(`/api/${path}`, {
+      method,
+      headers: { Authorization: `tma ${tg?.initData ?? ''}` },
+      signal: deadline.signal,
+    })
+    if (response.status === 401) throw new Error('Открой StreakMe заново из Telegram.')
+    if (!response.ok) throw new Error('Связь с сервером прервалась. Попробуй ещё раз.')
+    return await response.json() as T
+  } catch (error) {
+    if (deadline.signal.aborted || error instanceof TypeError) {
+      throw new Error('Связь с сервером прервалась. Попробуй ещё раз.')
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
 }

@@ -24,3 +24,5 @@ CREATE TABLE IF NOT EXISTS claimed_invites (
     receiver_id bigint NOT NULL REFERENCES profiles (id),
     claimed_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS claimed_invites_claimed_at_idx ON claimed_invites (claimed_at);

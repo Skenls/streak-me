@@ -12,39 +12,55 @@ Telegram Mini App для общих огоньков с друзьями. На �
 
 ## Запуск в Docker
 
-Для браузерного демо можно оставить `BOT_TOKEN` и `APP_URL` пустыми. Для работы в Telegram нужен бот и публичный HTTPS-адрес.
+StreakMe открывается с мобильной кнопки бота. В обычном браузере страница предлагает открыть Telegram.
 
-1. Скопируй `.env.example` в `.env` и задай `POSTGRES_PASSWORD`.
-2. Для Telegram создай бота через [@BotFather](https://t.me/BotFather), включи inline-режим командой `/setinline` и задай текст подсказки. Укажи токен в `BOT_TOKEN`, а публичный адрес Mini App в `APP_URL`, например `https://streak.example.com/`.
-3. Запусти приложение командой ниже.
+1. В каталоге репозитория создай `.env`, если файла ещё нет.
 
    ```sh
-   docker compose up -d --build --wait
+   umask 077
+   test -f .env || cp .env.example .env
+   chmod 600 .env
    ```
 
-4. Открой `http://127.0.0.1:8080/` для демо. Для проверки в Telegram отправь боту `/start` и нажми **Открыть StreakMe**.
+2. Укажи `BOT_TOKEN` от [@BotFather](https://t.me/BotFather) и включи inline-режим командой `/setinline`. В `APP_URL` укажи адрес Mini App, например `https://streakme.185.240.121.158.sslip.io/`.
+3. Задай разные случайные пароли `POSTGRES_PASSWORD` и `APP_DB_PASSWORD`. Для новой базы каждый можно сгенерировать командой `openssl rand -hex 32`. При обновлении существующей установки используй прежний `POSTGRES_PASSWORD` от её тома.
+4. Создай общую сеть, подключи Caddy и запусти Compose по инструкции ниже. После запуска отправь боту `/start` и нажми **Открыть StreakMe**.
 
-При старте приложение создаёт таблицы в PostgreSQL и настраивает кнопку Mini App в меню бота. Бот принимает обновления через long polling. Запускай один экземпляр сервиса `app` на токен. Если для токена уже настроен входящий webhook, удали его перед первым запуском polling.
+`db-role` создаёт таблицы и выдаёт приложению отдельную PostgreSQL-роль для работы с данными. У сервиса приложения и базы нет опубликованных хостовых портов. Данные хранятся в томе `streakme-data`.
 
-```sh
-docker compose logs -f app
-curl -f http://127.0.0.1:8080/healthz
-```
+Бот настраивает кнопку меню при старте и получает обновления через long polling. Запускай один экземпляр сервиса `app` на токен. Если для него уже настроен webhook, удали его перед первым запуском polling. Данные запуска Telegram принимаются в течение часа. После истечения срока открой Mini App заново.
 
-PostgreSQL хранит данные в томе `streakme-data`. Порт приложения опубликован только на loopback. Чтобы выбрать другой хостовый порт, задай `APP_PORT` и обнови upstream прокси.
+## Caddy в Docker
 
-## Caddy
-
-Если Caddy работает на том же хосте, направь DNS-запись домена на сервер и добавь блок в существующий Caddyfile. Caddy сможет выпустить HTTPS-сертификат, когда домен доступен снаружи и открыты порты 80 и 443.
+Добавь в существующий Caddyfile отдельный блок.
 
 ```caddyfile
-streak.example.com {
-    encode zstd gzip
-    reverse_proxy 127.0.0.1:8080
+streakme.185.240.121.158.sslip.io {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	reverse_proxy streakme-app:8080
 }
 ```
 
-В `APP_URL` укажи тот же домен с `https://`. Caddy передаёт весь сайт и запросы `/api/*` одному сервису. Если Caddy работает в контейнере, подключи его и `app` к общей Docker-сети и используй `reverse_proxy app:8080`. Адрес `127.0.0.1` внутри контейнера Caddy указывает на сам контейнер.
+Создай сеть и подключи работающий контейнер Caddy один раз. При другом имени сети укажи то же значение в `CADDY_NETWORK`.
+
+```sh
+docker network inspect streakme_proxy >/dev/null 2>&1 || docker network create streakme_proxy
+docker network connect streakme_proxy shlyapgrader_caddy
+docker compose up -d --build --wait
+docker exec shlyapgrader_caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker exec shlyapgrader_caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+Чтобы подключение сохранялось после пересоздания Caddy, добавь `streakme_proxy` как external-сеть в Compose того проекта и подключи к ней сервис Caddy вместе с его текущими сетями. Внешние порты 80 и 443 нужны Caddy для HTTPS. Проверка `/healthz` доступна внутри контейнера приложения.
+
+```sh
+docker compose ps
+docker compose logs --tail=100 app
+```
 
 ## Разработка
 
@@ -58,6 +74,6 @@ uv sync --locked
 uv run --locked python -m unittest discover -s tests -v
 ```
 
-Для интеграционного теста укажи `TEST_DATABASE_URL` с адресом отдельной тестовой базы. Тест создаёт в ней профили и серии и имитирует обновления Telegram через aiogram.
+Для интеграционного теста укажи `TEST_DATABASE_URL` с адресом отдельной тестовой базы и заранее примени к ней `streakme/schema.sql`. Тест создаёт профили и серии и имитирует обновления Telegram через aiogram.
 
 Документация по интеграции и жестам. [Telegram Mini Apps](https://core.telegram.org/bots/webapps), [Telegram Inline Bots](https://core.telegram.org/bots/inline), [CSS Scroll Snap и карусели](https://developer.chrome.com/blog/carousels-with-css), [Caddy reverse proxy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy).

@@ -39,7 +39,9 @@ services:
       POSTGRES_USER: streakme
       POSTGRES_DB: streakme
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
-    networks: [backend]
+    networks:
+      backend:
+        aliases: [streakme-db]
     volumes:
       - streakme-data:/var/lib/postgresql
     healthcheck:
@@ -51,7 +53,7 @@ services:
     <<: *postgres
     command: ["psql", "-X", "-w", "-v", "ON_ERROR_STOP=1", "-f", "/db-role.sql"]
     environment:
-      PGHOST: db
+      PGHOST: streakme-db
       PGUSER: streakme
       PGDATABASE: streakme
       PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}

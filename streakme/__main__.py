@@ -30,7 +30,7 @@ async def application():
         raise ValueError("APP_URL must be the HTTPS address of the Mini App root")
 
     dsn = os.getenv("DATABASE_URL") or make_conninfo(
-        host="db", dbname="streakme", user="streakme_app", password=os.environ["APP_DB_PASSWORD"]
+        host="streakme-db", dbname="streakme", user="streakme_app", password=os.environ["APP_DB_PASSWORD"]
     )
     db = Database(dsn)
     static = Path(os.getenv("WEB_DIST", "web/dist"))

@@ -1,5 +1,6 @@
 import { useState, type CSSProperties } from 'react'
 import type { Person } from './model'
+import seriychik from './assets/seriychik.webp'
 
 export function Avatar({ person, hue }: { person: Person; hue: number }) {
   const [failedUrl, setFailedUrl] = useState<string>()
@@ -15,8 +16,9 @@ export function Avatar({ person, hue }: { person: Person; hue: number }) {
 }
 
 export function Flame({ mascot = false }: { mascot?: boolean }) {
-  return <span className={mascot ? 'mascot' : 'flame'} aria-hidden="true">
-    <span className="flame-body" />
-    {mascot && <span className="mascot-face"><i /><i /><b /></span>}
+  if (mascot) return <span className="mascot" aria-hidden="true">
+    <img src={seriychik} width="512" height="512" alt="" draggable="false" />
   </span>
+
+  return <span className="flame" aria-hidden="true"><span className="flame-body" /></span>
 }

@@ -4,10 +4,11 @@ import { Carousel } from './carousel'
 import { daysLabel, pairState, preview, rank, type Dashboard, type Person, type Streak } from './model'
 import { api, haptic, initTelegram, inTelegram, tg } from './telegram'
 import { Avatar, Flame } from './visuals'
+import './fonts.css'
 import './style.css'
 
-function Modal({ children, onClose, className }: {
-  children: ReactNode; onClose(): void; className: string
+function Modal({ children, onClose, className, style }: {
+  children: ReactNode; onClose(): void; className: string; style?: CSSProperties
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const close = useRef(onClose)
@@ -24,7 +25,7 @@ function Modal({ children, onClose, className }: {
       backButton?.hide()
     }
   }, [])
-  return <dialog ref={dialog} className={className} aria-labelledby="dialog-title"
+  return <dialog ref={dialog} className={className} style={style} aria-labelledby="dialog-title"
     onClose={() => close.current()}>
     <button type="button" className="icon-button close-button" aria-label="Закрыть"
       onClick={() => dialog.current?.close()}><span className="cross" /></button>
@@ -38,12 +39,14 @@ function Detail({ pair, me, onClose, onConfirm }: {
   const { tier, next } = rank(pair.days)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [celebrate, setCelebrate] = useState(false)
 
   async function confirm() {
     setError('')
     setBusy(true)
     try {
       await onConfirm()
+      setCelebrate(true)
       haptic()
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Попробуй ещё раз.')
@@ -52,19 +55,21 @@ function Detail({ pair, me, onClose, onConfirm }: {
     }
   }
 
-  return <Modal className="detail" onClose={onClose}>
-    <div className="detail-shell" style={{ '--hue': tier.hue } as CSSProperties}>
+  return <Modal className="detail" onClose={onClose} style={{ '--hue': tier.hue } as CSSProperties}>
+    <div className="detail-shell">
       <header className="detail-header">
         <span className="card-level"><span />{tier.name}</span>
         <h2 id="dialog-title">{pair.friend.name}</h2>
         {pair.friend.username && <p>@{pair.friend.username}</p>}
       </header>
-      <div className="mascot-stage">
-        <span className="orbit" />
-        <span className="spark one">✧</span><span className="spark two">✦</span>
+      <div className="mascot-stage" data-celebrate={celebrate}>
+        <span className="orbit" aria-hidden="true" />
+        <span className="spark one" aria-hidden="true">✧</span>
+        <span className="spark two" aria-hidden="true">✦</span>
+        <span className="spark three" aria-hidden="true">✦</span>
         <Flame mascot />
       </div>
-      <div className="detail-score"><strong>{pair.days}</strong> {daysLabel(pair.days)} подряд</div>
+      <div className="detail-score"><strong>{pair.days}</strong><span>{daysLabel(pair.days)} подряд</span></div>
       {next && <div className="milestone">
         <div><span>До ступени «{next.name}»</span><b>{next.from - pair.days} {daysLabel(next.from - pair.days)}</b></div>
         <progress value={pair.days - tier.from} max={next.from - tier.from} aria-label="Прогресс до следующей ступени" />

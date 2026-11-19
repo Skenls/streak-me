@@ -46,8 +46,8 @@ export function initTelegram() {
   const events = ['safeAreaChanged', 'contentSafeAreaChanged', 'fullscreenChanged'] as const
   for (const event of events) tg.onEvent(event, safeArea)
   if (tg.isVersionAtLeast('6.9')) {
-    tg.setHeaderColor?.('#100d16')
-    tg.setBackgroundColor?.('#100d16')
+    tg.setHeaderColor?.('#fff6ee')
+    tg.setBackgroundColor?.('#fff6ee')
   }
   if (tg.isVersionAtLeast('7.7')) tg.disableVerticalSwipes?.()
   safeArea()

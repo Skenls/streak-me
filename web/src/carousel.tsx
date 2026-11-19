@@ -60,7 +60,11 @@ export function Carousel({ streaks, motion, onSelect }: {
             aria-label={`${pair.friend.name}, ${pair.days} ${daysLabel(pair.days)}, открыть серию`}>
             <span className="card-level"><span />{tier.name}</span>
             <span className="card-count"><Flame /><strong>{pair.days}</strong><small>{daysLabel(pair.days)}</small></span>
-            <Avatar person={pair.friend} hue={tier.hue + 15} />
+            <span className="card-scene">
+              <span className="card-twinkle" aria-hidden="true">✦</span>
+              <Avatar person={pair.friend} hue={tier.hue + 15} />
+              <Flame mascot />
+            </span>
             <span className="friend-name">{pair.friend.name}</span>
             {pair.friend.username && <span className="handle">@{pair.friend.username}</span>}
             <span className="card-status">{pairState(pair)}</span>

@@ -75,15 +75,28 @@ def create_app(db: Database, static: Path, token: str, username: str):
 
     async def confirm(request):
         user = validate(request)
-        pair = await db.get(int(request.match_info["id"]), user.id, confirm=True)
+        pair = await db.get(int(request.match_info["id"]), user.id, action="confirm")
         if pair is None:
             raise web.HTTPNotFound()
         return json(pair)
 
+    async def restore(request):
+        user = validate(request)
+        pair = await db.get(int(request.match_info["id"]), user.id, action="restore")
+        if pair is None:
+            raise web.HTTPNotFound()
+        return json(pair)
+
+    async def delete(request):
+        user = validate(request)
+        if not await db.delete(int(request.match_info["id"]), user.id):
+            raise web.HTTPNotFound()
+        return web.Response(status=204)
+
     async def invite(request):
         user = validate(request)
         await db.save_profile(user)
-        return json({"url": invite_link(username, user.id, token)})
+        return json({"url": invite_link(username, await db.invite_code(user.id))})
 
     async def index(request):
         return web.FileResponse(static / "index.html", headers={"Cache-Control": "no-cache"})
@@ -99,6 +112,8 @@ def create_app(db: Database, static: Path, token: str, username: str):
         web.get("/healthz", health),
         web.get("/api/streaks", pairs),
         web.post(r"/api/streaks/{id:[1-9][0-9]{0,17}}/confirm", confirm),
+        web.post(r"/api/streaks/{id:[1-9][0-9]{0,17}}/restore", restore),
+        web.delete(r"/api/streaks/{id:[1-9][0-9]{0,17}}", delete),
         web.post("/api/invite", invite),
         web.get("/", index),
     ])

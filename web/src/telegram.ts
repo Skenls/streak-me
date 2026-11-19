@@ -3,7 +3,6 @@ type TelegramEvent = 'safeAreaChanged' | 'contentSafeAreaChanged' | 'fullscreenC
 
 interface TelegramApp {
   initData: string
-  isFullscreen?: boolean
   safeAreaInset?: Insets
   contentSafeAreaInset?: Insets
   ready(): void
@@ -12,8 +11,6 @@ interface TelegramApp {
   setHeaderColor?(color: string): void
   setBackgroundColor?(color: string): void
   disableVerticalSwipes?(): void
-  requestFullscreen?(): void
-  exitFullscreen?(): void
   onEvent(event: TelegramEvent, callback: () => void): void
   offEvent(event: TelegramEvent, callback: () => void): void
   openTelegramLink(url: string): void
@@ -77,6 +74,7 @@ export async function api<T>(path: string, method = 'GET'): Promise<T> {
     })
     if (response.status === 401) throw new Error('Открой StreakMe заново из Telegram.')
     if (!response.ok) throw new Error('Связь с сервером прервалась. Попробуй ещё раз.')
+    if (response.status === 204) return undefined as T
     return await response.json() as T
   } catch (error) {
     if (deadline.signal.aborted || error instanceof TypeError) {

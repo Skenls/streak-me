@@ -11,6 +11,7 @@ from psycopg.conninfo import make_conninfo
 
 from .bot import dispatcher
 from .db import Database
+from .reminders import maintenance
 from .server import create_app
 
 
@@ -56,11 +57,13 @@ async def application():
                 bot, handle_signals=False, close_bot_session=False, tasks_concurrency_limit=16
             )
         )
+        reminders = asyncio.create_task(maintenance(db, bot, app_url))
         try:
             yield
         finally:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            reminders.cancel()
+            await asyncio.gather(task, reminders, return_exceptions=True)
             await bot.session.close()
 
     app.cleanup_ctx.append(polling_context)

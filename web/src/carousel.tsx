@@ -5,12 +5,13 @@ import { Avatar, Flame } from './visuals'
 
 const nativeTimeline = CSS.supports('(animation-timeline: view()) and (animation-range: entry)')
 
-export function Carousel({ streaks, motion, onSelect }: {
-  streaks: Streak[]; motion: boolean; onSelect(pair: Streak): void
+export function Carousel({ streaks, onSelect }: {
+  streaks: Streak[]; onSelect(pair: Streak): void
 }) {
   const scroller = useRef<HTMLOListElement>(null)
   const current = useRef(0)
   const [active, setActive] = useState(0)
+  const indexWithinList = Math.min(active, streaks.length - 1)
 
   function update(event: UIEvent<HTMLOListElement>) {
     const list = event.currentTarget
@@ -42,7 +43,7 @@ export function Carousel({ streaks, motion, onSelect }: {
     if (!list || !slide || !first) return
     list.scrollTo({
       left: slide.offsetLeft - first.offsetLeft,
-      behavior: motion && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'instant',
+      behavior: !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth' : 'instant',
     })
   }
 
@@ -50,20 +51,23 @@ export function Carousel({ streaks, motion, onSelect }: {
     <ol className="carousel" ref={scroller} onScroll={update} onKeyDown={event => {
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
       event.preventDefault()
-      go(current.current + (event.key === 'ArrowRight' ? 1 : -1))
+      go(indexWithinList + (event.key === 'ArrowRight' ? 1 : -1))
     }}>
       {streaks.map((pair, index) => {
         const { tier } = rank(pair.days)
-        return <li className="slide" key={pair.id} data-active={active === index}
+        return <li className="slide" key={pair.id} data-active={indexWithinList === index}
           style={{ '--hue': tier.hue, '--initial-offset': Math.sign(index) } as CSSProperties}>
           <button className="streak-card" type="button" onClick={() => onSelect(pair)}
-            aria-label={`${pair.friend.name}, ${pair.days} ${daysLabel(pair.days)}, открыть серию`}>
+            aria-label={`${pair.friend.name}, ${pair.days} ${daysLabel(pair.days)}, ${pairState(pair)}`}>
             <span className="card-level"><span />{tier.name}</span>
-            <span className="card-count"><Flame /><strong>{pair.days}</strong><small>{daysLabel(pair.days)}</small></span>
+            <span className="card-count">
+              {pair.status === 'active' ? <Flame /> : <span className="state-sign" aria-hidden="true">
+                {pair.status === 'frozen' ? '❄' : '·'}
+              </span>}<strong>{pair.days}</strong><small>{daysLabel(pair.days)}</small></span>
             <span className="card-scene">
               <span className="card-twinkle" aria-hidden="true">✦</span>
               <Avatar person={pair.friend} hue={tier.hue + 15} />
-              <Flame mascot />
+              <Flame mascot status={pair.status} />
             </span>
             <span className="friend-name">{pair.friend.name}</span>
             {pair.friend.username && <span className="handle">@{pair.friend.username}</span>}
@@ -74,14 +78,14 @@ export function Carousel({ streaks, motion, onSelect }: {
     </ol>
     {streaks.length > 1 && <div className="carousel-controls">
       <button className="icon-button" type="button" aria-label="Предыдущая серия"
-        disabled={active <= 0} onClick={() => go(active - 1)}><span className="chevron left" /></button>
+        disabled={indexWithinList <= 0} onClick={() => go(indexWithinList - 1)}><span className="chevron left" /></button>
       <div className="dots">
         {streaks.map((pair, index) => <button key={pair.id} type="button"
-          aria-label={pair.friend.name} aria-current={index === active ? 'true' : undefined}
+          aria-label={pair.friend.name} aria-current={index === indexWithinList ? 'true' : undefined}
           onClick={() => go(index)}><span /></button>)}
       </div>
       <button className="icon-button" type="button" aria-label="Следующая серия"
-        disabled={active >= streaks.length - 1} onClick={() => go(active + 1)}><span className="chevron" /></button>
+        disabled={indexWithinList >= streaks.length - 1} onClick={() => go(indexWithinList + 1)}><span className="chevron" /></button>
     </div>}
   </section>
 }

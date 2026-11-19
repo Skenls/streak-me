@@ -6,6 +6,8 @@ export interface Person {
 export interface Streak {
   id: number
   days: number
+  status: "active" | "frozen" | "lost"
+  restoresLeft: number
   confirmed: boolean
   friendConfirmed: boolean
   friend: Person & { id: number; username?: string | null }
@@ -40,7 +42,8 @@ export function daysLabel(days: number) {
 }
 
 export function pairState(pair: Streak) {
-  if (pair.confirmed && pair.friendConfirmed) return 'День засчитан'
+  if (pair.status === 'lost') return 'Огонёк погас'
+  if (pair.status === 'active') return 'День засчитан'
   if (pair.confirmed) return 'Ждём друга'
   if (pair.friendConfirmed) return 'Друг уже отметился'
   return 'Пора отметиться'

@@ -5,6 +5,7 @@ import os
 import secrets
 import time
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -16,6 +17,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from streakme.bot import dispatcher
 from streakme.db import Database
+from streakme.reminders import remind
 from streakme.server import create_app
 
 TOKEN = "1234:integration-test"
@@ -67,12 +69,30 @@ class IntegrationTest(unittest.IsolatedAsyncioTestCase):
         await self.dp.feed_update(self.bot, Update.model_validate({"update_id": 1, **fields}))
         return self.session.calls[-1]
 
-    async def accept(self, user, start):
+    async def command(self, user, text):
         return await self.update(message={
             "message_id": 1, "date": int(time.time()), "from": user,
             "chat": {"id": user["id"], "type": "private"},
-            "text": f"/start {start}", "entities": [{"type": "bot_command", "offset": 0, "length": 6}],
+            "text": text, "entities": [{"type": "bot_command", "offset": 0, "length": len(text.split()[0])}],
         })
+
+    async def accept(self, user, start):
+        return await self.command(user, f"/start {start}")
+
+    async def invite(self, user):
+        response = await self.client.post("/api/invite", headers=auth(user))
+        self.assertEqual(response.status, 200)
+        return (await response.json())["url"]
+
+    async def callbacks(self, user, action, *, chat="instance"):
+        return await self.update(callback_query={
+            "id": "3", "from": user, "chat_instance": chat,
+            "inline_message_id": "inline-id", "data": action,
+        })
+
+    @staticmethod
+    def start_value(url):
+        return parse_qs(urlsplit(url).query)["start"][0]
 
     async def test_invite_access_and_concurrent_confirmation(self):
         response = await self.client.get("/api/streaks")
@@ -86,50 +106,131 @@ class IntegrationTest(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get("/api/streaks", headers=auth({**self.a, "photo_url": "https://example.org/photo"}))
         self.assertIsNone((await response.json())["me"]["photoUrl"])
 
-        inline = await self.update(inline_query={"id": "1", "from": self.a, "query": "", "offset": ""})
+        inline = await self.update(inline_query={
+            "id": "1", "from": self.a, "query": "", "offset": "", "chat_type": "group",
+        })
         self.assertIsInstance(inline, AnswerInlineQuery)
-        self.assertEqual(len(inline.results), 3)
-        inline_url = inline.results[0].reply_markup.inline_keyboard[0][0].url
-        self.assertIn(f"https://t.me/{USERNAME}?start=join_", inline_url)
+        self.assertEqual(len(inline.results), 1)
+        group_buttons = inline.results[0].reply_markup.inline_keyboard
+        self.assertEqual(len(group_buttons), 1)
+        inline_url = group_buttons[0][0].url
 
-        invite = await self.client.post("/api/invite", headers=auth(self.a))
-        self.assertEqual(invite.status, 200)
-        url = (await invite.json())["url"]
-        start = parse_qs(urlsplit(url).query)["start"][0]
+        url = await self.invite(self.a)
+        self.assertEqual(inline_url, url)
+        self.assertEqual(await self.invite(self.a), url)
+        start = self.start_value(url)
         self.assertIn("твоё", (await self.accept(self.a, start)).text)
-        accepted = await self.accept(self.b, start)
-        self.assertIsInstance(accepted, SendMessage)
-        self.assertIn("создан", accepted.text)
-        self.assertIn("создан", (await self.accept(self.b, start)).text)
-        self.assertIn("уже приняли", (await self.accept(self.c, start)).text)
+        for user in (self.b, self.c, self.b):
+            accepted = await self.accept(user, start)
+            self.assertIsInstance(accepted, SendMessage)
+            self.assertIn("готов", accepted.text)
 
-        response = await self.client.get("/api/streaks", headers=auth(self.a))
-        pair, = (await response.json())["streaks"]
-        self.assertEqual(pair["friend"]["id"], self.b["id"])
-        path = f"/api/streaks/{pair['id']}/confirm"
-        response = await self.client.post(path, headers=auth(self.c))
+        reset = await self.command(self.a, "/reset")
+        new_url = await self.invite(self.a)
+        self.assertNotEqual(new_url, url)
+        self.assertIn(new_url, reset.text)
+        self.assertIn("недействительна", (await self.accept(self.b, start)).text)
+
+        pairs = await self.db.list(self.a["id"])
+        pair = next(row for row in pairs if row["friend"]["id"] == self.b["id"])
+        other = next(row for row in pairs if row["friend"]["id"] == self.c["id"])
+        self.assertEqual(pair["status"], "frozen")
+        path = f"/api/streaks/{pair['id']}"
+        for suffix in ("/confirm", "/restore"):
+            response = await self.client.post(path + suffix, headers=auth(self.c))
+            self.assertEqual(response.status, 404)
+        response = await self.client.delete(path, headers=auth(self.c))
         self.assertEqual(response.status, 404)
 
+        inline = await self.update(inline_query={
+            "id": "2", "from": self.a, "query": "Mira", "offset": "", "chat_type": "private",
+        })
+        self.assertEqual([result.id for result in inline.results], ["invite"])
+        status, confirm = inline.results[0].reply_markup.inline_keyboard[1]
+        reply = await self.callbacks(self.a, status.callback_data)
+        self.assertIn("Пусть друг", reply.text)
+        reply = await self.callbacks(self.b, confirm.callback_data)
+        self.assertIsInstance(reply, AnswerCallbackQuery)
+        self.assertIn("очередь друга", reply.text)
+        reply = await self.callbacks(self.c, confirm.callback_data)
+        self.assertIn("нет общей серии", reply.text)
+
         confirmations = await asyncio.gather(
-            *(self.client.post(path, headers=auth(user)) for user in (self.a, self.b, self.b))
+            *(self.client.post(path + "/confirm", headers=auth(user)) for user in (self.a, self.b, self.b))
         )
         self.assertTrue(all(response.status == 200 for response in confirmations))
-        self.assertEqual(sorted([(await response.json())["days"] for response in confirmations])[-1], 1)
+        self.assertEqual(max([(await response.json())["days"] for response in confirmations]), 1)
         final = await self.db.get(pair["id"], self.a["id"])
-        self.assertEqual((final["days"], final["confirmed"], final["friendConfirmed"]), (1, True, True))
+        self.assertEqual((final["days"], final["status"]), (1, "active"))
+        self.assertEqual((await self.db.get(other["id"], self.a["id"]))["days"], 0)
+        reply = await self.callbacks(self.a, status.callback_data)
+        self.assertIn("Сегодня оба", reply.text)
 
-        inline = await self.update(inline_query={"id": "2", "from": self.a, "query": "Mira", "offset": ""})
-        self.assertEqual([result.id for result in inline.results], [
-            "invite", f"confirm:{pair['id']}", f"status:{pair['id']}",
-        ])
-        for user, action, expected in (
-            (self.c, "confirm", "Только участники"),
-            (self.b, "confirm", "Сегодня оба"),
-            (self.a, "status", "Дней подряд: 1"),
-        ):
-            answer = await self.update(callback_query={
-                "id": "3", "from": user, "chat_instance": "instance",
-                "inline_message_id": "inline-id", "data": f"{action}:{pair['id']}",
-            })
-            self.assertIsInstance(answer, AnswerCallbackQuery)
-            self.assertIn(expected, answer.text)
+        response = await self.client.delete(path, headers=auth(self.b))
+        self.assertEqual(response.status, 204)
+        self.assertEqual(await self.db.list(self.b["id"]), [])
+        self.assertEqual([row["id"] for row in await self.db.list(self.a["id"])], [other["id"]])
+
+    async def test_lifecycle_quota_and_reminder(self):
+        await self.accept(self.b, self.start_value(await self.invite(self.a)))
+        pair, = await self.db.list(self.a["id"])
+        pair_id = pair["id"]
+        now = datetime.now(UTC)
+        today = now.date()
+        yesterday = today - timedelta(days=1)
+        path = f"/api/streaks/{pair_id}"
+
+        async with self.db.pool.connection() as conn:
+            await conn.execute(
+                "UPDATE streaks SET days=11, completed_day=%s, low_day=%s WHERE id=%s",
+                (yesterday, today, pair_id),
+            )
+        await remind(self.db, self.bot, "https://streak.example.com/", now.replace(hour=18, minute=59))
+        self.assertEqual(len(self.session.calls), 1)  # Only the earlier /start reply.
+        await remind(self.db, self.bot, "https://streak.example.com/", now.replace(hour=19, minute=0))
+        sent = self.session.calls[-1]
+        self.assertIsInstance(sent, SendMessage)
+        self.assertEqual(sent.chat_id, max(self.a["id"], self.b["id"]))
+        await remind(self.db, self.bot, "https://streak.example.com/", now.replace(hour=19, minute=1))
+        self.assertEqual(len(self.session.calls), 2)
+
+        async with self.db.pool.connection() as conn:
+            await conn.execute(
+                "UPDATE streaks SET completed_day=%s, low_day=NULL, restore_month=%s, restore_count=4 WHERE id=%s",
+                (today - timedelta(days=2), today.replace(day=1), pair_id),
+            )
+        stale = await self.client.post(path + "/confirm", headers=auth(self.a))
+        self.assertEqual((await stale.json())["status"], "lost")
+        restorations = await asyncio.gather(
+            *(self.client.post(path + "/restore", headers=auth(user)) for user in (self.a, self.b))
+        )
+        for response in restorations:
+            updated = await response.json()
+            self.assertEqual((updated["days"], updated["status"], updated["restoresLeft"]), (11, "frozen", 0))
+
+        async with self.db.pool.connection() as conn:
+            await conn.execute(
+                "UPDATE streaks SET completed_day=%s WHERE id=%s",
+                (today - timedelta(days=2), pair_id),
+            )
+        self.assertIsNone(await self.db.get(pair_id, self.b["id"]))
+        await self.db.expire(today)
+        async with self.db.pool.connection() as conn:
+            row = await conn.execute("SELECT id FROM streaks WHERE id=%s", (pair_id,))
+            self.assertIsNone(await row.fetchone())
+        await self.accept(self.b, self.start_value(await self.invite(self.a)))
+        new, = await self.db.list(self.a["id"])
+        self.assertNotEqual(new["id"], pair_id)
+        self.assertEqual(new["days"], 0)
+
+        # A loss in a new calendar month uses the new quota, even when the old month was full.
+        first = today.replace(day=1)
+        previous_month = first - timedelta(days=1)
+        async with self.db.pool.connection() as conn:
+            await conn.execute(
+                "UPDATE streaks SET days=3, completed_day=%s, restore_month=%s, restore_count=5 WHERE id=%s",
+                (previous_month - timedelta(days=1), previous_month.replace(day=1), new["id"]),
+            )
+        await self.db.expire(first)
+        carried = await self.db.get(new["id"], self.a["id"])
+        self.assertEqual((carried["status"], carried["restoresLeft"]), ("lost", 5))

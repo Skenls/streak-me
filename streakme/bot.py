@@ -1,6 +1,6 @@
 from aiogram import Dispatcher, F
 from aiogram.enums import ChatType
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.filters.command import CommandObject
 from aiogram.types import (
     CallbackQuery,
@@ -14,33 +14,27 @@ from aiogram.types import (
 )
 
 from .db import Database
-from .rules import issue_invite, read_invite
+from .rules import STATIC_INVITE, issue_chat_key, read_chat_key, read_invite
 
 
-def keyboard(label: str, **action) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=label, **action)]])
+def open_app(app_url: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Открыть StreakMe", web_app=WebAppInfo(url=app_url))
+    ]])
 
 
-def invite_link(username: str, user_id: int, secret: str) -> str:
-    return f"https://t.me/{username}?start=join_{issue_invite(user_id, secret)}"
-
-
-def article(identifier, title, description, text, button):
-    return InlineQueryResultArticle(
-        id=identifier,
-        title=title,
-        description=description,
-        input_message_content=InputTextMessageContent(message_text=text),
-        reply_markup=button,
-    )
+def invite_link(username: str, code: str) -> str:
+    return f"https://t.me/{username}?start=join_{code}"
 
 
 def status_text(pair) -> str:
-    if pair["confirmed"] and pair["friendConfirmed"]:
+    if pair["status"] == "lost":
+        return f"Огонёк погас после {pair['days']} дн. Восстановить его можно в StreakMe."
+    if pair["status"] == "active":
         return f"🔥 Дней подряд: {pair['days']}. Сегодня оба отметились!"
     if pair["confirmed"]:
-        return f"🔥 Дней подряд: {pair['days']}. Ты отметился, теперь очередь друга."
-    return f"🔥 Дней подряд: {pair['days']}. Отметься сегодня, чтобы поддержать огонёк."
+        return f"🧊 Дней подряд: {pair['days']}. Ты отметился, теперь очередь друга."
+    return f"🧊 Дней подряд: {pair['days']}. Отметься сегодня, чтобы поддержать огонёк."
 
 
 def dispatcher(db: Database, username: str, token: str, app_url: str) -> Dispatcher:
@@ -55,64 +49,67 @@ def dispatcher(db: Database, username: str, token: str, app_url: str) -> Dispatc
         text = "Привет! Открой StreakMe, чтобы посмотреть свои серии или пригласить друга."
         if command.args and command.args.startswith("join_"):
             invite = command.args.removeprefix("join_")
-            inviter = read_invite(invite, token)
-            if inviter is None:
-                text = "Срок приглашения истёк или ссылка неверна. Попроси друга отправить новую."
-            elif inviter == user.id:
-                text = "Это твоё приглашение. Отправь его другу."
-            elif await db.accept(invite, inviter, user.id):
-                text = "🔥 Огонёк создан! Отметьтесь оба, чтобы засчитать первый день."
+            if STATIC_INVITE.fullmatch(invite):
+                result = await db.accept_invite(invite, user.id)
             else:
-                text = "Это приглашение уже приняли. Попроси друга отправить новое."
-        await message.answer(text, reply_markup=keyboard("Открыть StreakMe", web_app=WebAppInfo(url=app_url)))
+                inviter = read_invite(invite, token)
+                result = await db.accept_invite(invite, user.id, legacy_inviter=inviter) if inviter else "invalid"
+            text = {
+                "ok": "🔥 Огонёк готов! Отметьтесь оба, чтобы засчитать день.",
+                "own": "Это твоё приглашение. Отправь его другу.",
+                "invalid": "Ссылка недействительна. Попроси друга прислать актуальную.",
+                "claimed": "Это старое приглашение уже использовано. Попроси друга прислать актуальную ссылку.",
+            }[result]
+        await message.answer(text, reply_markup=open_app(app_url))
+
+    @dp.message(Command("reset"), F.chat.type == ChatType.PRIVATE)
+    async def reset(message: Message):
+        user = message.from_user
+        if user is None:
+            return
+        await db.save_profile(user)
+        link = invite_link(username, await db.invite_code(user.id, reset=True))
+        await message.answer(f"Ссылка обновлена. Предыдущая больше не действует.\n{link}")
 
     @dp.inline_query()
     async def inline(query: InlineQuery):
         user = query.from_user
         await db.save_profile(user)
-        search = query.query.strip().lstrip("@").casefold()
-        pairs = [
-            pair for pair in await db.list(user.id)
-            if search in pair["friend"]["name"].casefold()
-            or search in (pair["friend"]["username"] or "").casefold()
-        ]
-        results = [article(
-            "invite", "Пригласить друга", "Отправить одноразовое приглашение",
-            "🔥 Давай зажжём общий огонёк в StreakMe!",
-            keyboard("Принять приглашение", url=invite_link(username, user.id, token)),
-        )]
-        for pair in pairs[:24]:
-            name = pair["friend"]["name"]
-            pair_id = pair["id"]
-            results.extend((
-                article(
-                    f"confirm:{pair_id}", f"Продлить серию · {name}",
-                    "Отправить кнопку отметки на сегодня",
-                    "🔥 Отметимся сегодня в StreakMe?",
-                    keyboard("Отметиться", callback_data=f"confirm:{pair_id}"),
-                ),
-                article(
-                    f"status:{pair_id}", f"Статус огонька · {name}",
-                    f"Дней подряд: {pair['days']}",
-                    f"🔥 StreakMe · дней подряд: {pair['days']}",
-                    keyboard("Проверить статус", callback_data=f"status:{pair_id}"),
-                ),
-            ))
-        if not pairs:
-            bot_link = f"https://t.me/{username}"
-            for identifier, title in (("confirm", "Продлить серию"), ("status", "Статус огонька")):
-                results.append(article(
-                    identifier, title, "Нет подходящих серий",
-                    "🔥 Серии с друзьями доступны в StreakMe.",
-                    keyboard("Открыть бота", url=bot_link),
-                ))
-        await query.answer(results, cache_time=0, is_personal=True)
+        link = invite_link(username, await db.invite_code(user.id))
+        buttons = [[InlineKeyboardButton(text="Принять приглашение", url=link)]]
+        if query.chat_type == ChatType.PRIVATE:
+            key = issue_chat_key(user.id, token)
+            buttons.append([
+                InlineKeyboardButton(text="Статус огонька", callback_data=f"chat:status:{key}"),
+                InlineKeyboardButton(text="Продлить", callback_data=f"chat:confirm:{key}"),
+            ])
+        result = InlineQueryResultArticle(
+            id="invite", title="Пригласить друга", description="Отправить ссылку на общий огонёк",
+            input_message_content=InputTextMessageContent(message_text="🔥 Давай зажжём общий огонёк в StreakMe!"),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        )
+        await query.answer([result], cache_time=0, is_personal=True)
+
+    @dp.callback_query(F.data.regexp(r"^chat:(confirm|status):[A-Za-z0-9_-]{38}$"))
+    async def pair_action(query: CallbackQuery):
+        _, action, key = query.data.split(":", 2)
+        owner = read_chat_key(key, token)
+        if owner is None or not query.inline_message_id:
+            await query.answer("Эта кнопка доступна в карточке личного чата.", show_alert=True)
+            return
+        user = query.from_user.id
+        pair_id = await db.inline_pair(query.chat_instance, owner, user)
+        pair = await db.get(pair_id, user, action="confirm" if action == "confirm" else None) if pair_id else None
+        if pair:
+            text = status_text(pair)
+        elif owner == user and pair_id is None:
+            text = "Пусть друг первым нажмёт кнопку на этой карточке, чтобы бот нашёл вашу серию."
+        else:
+            text = "В этом личном чате нет общей серии. Воспользуйтесь приглашением."
+        await query.answer(text, show_alert=True)
 
     @dp.callback_query(F.data.regexp(r"^(confirm|status):[1-9][0-9]{0,17}$"))
-    async def pair_action(query: CallbackQuery):
-        action, pair_id = query.data.split(":", 1)
-        pair = await db.get(int(pair_id), query.from_user.id, confirm=action == "confirm")
-        text = status_text(pair) if pair else "Только участники огонька могут использовать эту кнопку."
-        await query.answer(text, show_alert=True)
+    async def old_pair_action(query: CallbackQuery):
+        await query.answer("Отправьте новую карточку StreakMe в личный чат.", show_alert=True)
 
     return dp
